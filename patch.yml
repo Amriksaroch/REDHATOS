@@ -15,7 +15,7 @@
       ansible.builtin.debug:
         msg: "Current kernel: {{ old_kernel.stdout }}"
 
-    - name: Ensure dnf-utils is installed (provides needs-restarting)
+    - name: Ensure dnf-utils is installed
       ansible.builtin.dnf:
         name: dnf-utils
         state: present
@@ -45,4 +45,6 @@
         reboot_timeout: 900
       when: reboot_required.rc == 1
 
-    - name: Show
+    - name: Show kernel after patching
+      ansible.builtin.command: uname -r
+      register: new_kernel
