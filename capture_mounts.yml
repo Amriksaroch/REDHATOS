@@ -1,0 +1,74 @@
+---
+- name: Capture mount entries
+  hosts: rhel
+  become: true
+  gather_facts: true
+  gather_subset:
+    - mounts
+
+  vars:
+    report_dir: "{{ playbook_dir }}/mount_reports"
+    timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+
+  tasks:
+    - name: Get currently mounted filesystems
+      ansible.builtin.command: findmnt --real -o TARGET,SOURCE,FSTYPE,OPTIONS
+      register: findmnt_out
+      changed_when: false
+      check_mode: false
+
+    - name: Get /etc/fstab entries (without comments)
+      ansible.builtin.shell: grep -Ev '^\s*(#|$)' /etc/fstab
+      register: fstab_out
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Get disk usage
+      ansible.builtin.command: df -hT -x tmpfs -x devtmpfs
+      register: df_out
+      changed_when: false
+      check_mode: false
+
+    - name: Show mounts from Ansible facts
+      ansible.builtin.debug:
+        msg: "{{ item.mount }} | {{ item.device }} | {{ item.fstype }} | {{ item.options }} | size={{ (item.size_total / 1024 / 1024 / 1024) | round(1) }}GB"
+      loop: "{{ ansible_mounts }}"
+      loop_control:
+        label: "{{ item.mount }}"
+
+    - name: Print mounted filesystems
+      ansible.builtin.debug:
+        var: findmnt_out.stdout_lines
+
+    - name: Print fstab entries
+      ansible.builtin.debug:
+        var: fstab_out.stdout_lines
+
+    - name: Create report directory on Jenkins
+      ansible.builtin.file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Save report on Jenkins server
+      ansible.builtin.copy:
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_mounts_{{ timestamp }}.txt"
+        content: |
+          Host: {{ inventory_hostname }}
+          Captured: {{ timestamp }}
+
+          ===== Mounted filesystems (findmnt) =====
+          {{ findmnt_out.stdout }}
+
+          ===== /etc/fstab =====
+          {{ fstab_out.stdout }}
+
+          ===== Disk usage (df -hT) =====
+          {{ df_out.stdout }}
+      delegate_to: localhost
+      become: false
+      check_mode: false
