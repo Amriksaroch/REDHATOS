@@ -1,5 +1,5 @@
 ---
-- name: Capture mount entries
+- name: Capture mount entries (human readable)
   hosts: rhel
   become: true
   gather_facts: true
@@ -11,39 +11,51 @@
     timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
   tasks:
-    - name: Get currently mounted filesystems
-      ansible.builtin.command: findmnt --real -o TARGET,SOURCE,FSTYPE,OPTIONS
-      register: findmnt_out
-      changed_when: false
-      check_mode: false
-
-    - name: Get /etc/fstab entries (without comments)
-      ansible.builtin.shell: grep -Ev '^\s*(#|$)' /etc/fstab
+    - name: Get /etc/fstab entries as a table
+      ansible.builtin.shell: grep -Ev '^\s*(#|$)' /etc/fstab | column -t
       register: fstab_out
       changed_when: false
       failed_when: false
       check_mode: false
 
-    - name: Get disk usage
-      ansible.builtin.command: df -hT -x tmpfs -x devtmpfs
-      register: df_out
-      changed_when: false
-      check_mode: false
+    - name: Build the report
+      ansible.builtin.set_fact:
+        report: |
+          ==========================================================================================
+           MOUNT REPORT
+           Host     : {{ inventory_hostname }} ({{ ansible_hostname }})
+           OS       : {{ ansible_distribution }} {{ ansible_distribution_version }}
+           Captured : {{ timestamp }}
+          ==========================================================================================
 
-    - name: Show mounts from Ansible facts
-      ansible.builtin.debug:
-        msg: "{{ item.mount }} | {{ item.device }} | {{ item.fstype }} | {{ item.options }} | size={{ (item.size_total / 1024 / 1024 / 1024) | round(1) }}GB"
-      loop: "{{ ansible_mounts }}"
-      loop_control:
-        label: "{{ item.mount }}"
+           MOUNTED FILESYSTEMS
+          ------------------------------------------------------------------------------------------
+          {{ '%-22s %-28s %-8s %9s %9s %9s %6s' | format('MOUNT POINT', 'DEVICE', 'TYPE', 'SIZE', 'USED', 'FREE', 'USE%') }}
+          ------------------------------------------------------------------------------------------
+          {% for m in ansible_mounts | sort(attribute='mount') %}
+          {% set total = m.size_total | default(0) %}
+          {% set free = m.size_available | default(0) %}
+          {% set used = total - free %}
+          {% set pct = ((used / total * 100) | round(1)) if total > 0 else 0 %}
+          {{ '%-22s %-28s %-8s %7.1fGB %7.1fGB %7.1fGB %5.1f%%' | format(m.mount, m.device, m.fstype, total / 1073741824, used / 1073741824, free / 1073741824, pct) }}
+          {% endfor %}
 
-    - name: Print mounted filesystems
-      ansible.builtin.debug:
-        var: findmnt_out.stdout_lines
+          ------------------------------------------------------------------------------------------
+           MOUNT OPTIONS
+          ------------------------------------------------------------------------------------------
+          {% for m in ansible_mounts | sort(attribute='mount') %}
+          {{ '%-22s %s' | format(m.mount, m.options) }}
+          {% endfor %}
 
-    - name: Print fstab entries
+          ------------------------------------------------------------------------------------------
+           /etc/fstab ENTRIES (device  mountpoint  fstype  options  dump  pass)
+          ------------------------------------------------------------------------------------------
+          {{ fstab_out.stdout }}
+          ==========================================================================================
+
+    - name: Print report in console
       ansible.builtin.debug:
-        var: fstab_out.stdout_lines
+        msg: "{{ report.split('\n') }}"
 
     - name: Create report directory on Jenkins
       ansible.builtin.file:
@@ -57,18 +69,8 @@
     - name: Save report on Jenkins server
       ansible.builtin.copy:
         dest: "{{ report_dir }}/{{ inventory_hostname }}_mounts_{{ timestamp }}.txt"
-        content: |
-          Host: {{ inventory_hostname }}
-          Captured: {{ timestamp }}
-
-          ===== Mounted filesystems (findmnt) =====
-          {{ findmnt_out.stdout }}
-
-          ===== /etc/fstab =====
-          {{ fstab_out.stdout }}
-
-          ===== Disk usage (df -hT) =====
-          {{ df_out.stdout }}
+        content: "{{ report }}"
+        mode: "0644"
       delegate_to: localhost
       become: false
       check_mode: false
