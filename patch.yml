@@ -9,10 +9,16 @@
       ansible.builtin.command: uname -r
       register: old_kernel
       changed_when: false
+      check_mode: false
 
     - name: Print current kernel
       ansible.builtin.debug:
         msg: "Current kernel: {{ old_kernel.stdout }}"
+
+    - name: Ensure dnf-utils is installed (provides needs-restarting)
+      ansible.builtin.dnf:
+        name: dnf-utils
+        state: present
 
     - name: Apply all updates
       ansible.builtin.dnf:
@@ -20,29 +26,23 @@
         state: latest
         update_cache: true
       register: patch_result
-      async: 3600        # allow up to 1 hour
-      poll: 15           # check every 15s
+      async: "{{ 0 if ansible_check_mode else 3600 }}"
+      poll: "{{ 0 if ansible_check_mode else 15 }}"
 
     - name: Show updated packages
       ansible.builtin.debug:
-        var: patch_result.results
+        var: patch_result.results | default([])
 
     - name: Check if reboot is needed
       ansible.builtin.command: needs-restarting -r
       register: reboot_required
       failed_when: false
       changed_when: reboot_required.rc == 1
+      check_mode: false
 
     - name: Reboot if required
       ansible.builtin.reboot:
         reboot_timeout: 900
       when: reboot_required.rc == 1
 
-    - name: Show kernel after patching
-      ansible.builtin.command: uname -r
-      register: new_kernel
-      changed_when: false
-
-    - name: Print new kernel
-      ansible.builtin.debug:
-        msg: "Kernel after patching: {{ new_kernel.stdout }}"
+    - name: Show
