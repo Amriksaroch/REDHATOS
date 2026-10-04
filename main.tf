@@ -58,7 +58,7 @@ resource "aws_instance" "this" {
   }
 
   metadata_options {
-    http_tokens = "required"   # IMDSv2
+    http_tokens = "required" # IMDSv2
   }
 
   tags = {
